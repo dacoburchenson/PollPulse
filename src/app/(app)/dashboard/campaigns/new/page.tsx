@@ -1,4 +1,3 @@
-
 "use client"
 
 import { useState, useActionState, useEffect } from "react";
@@ -35,7 +34,7 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { collection, addDoc, Timestamp } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-import { useAuthState } from 'react-firebase-hooks/auth';
+import { onAuthStateChanged } from "firebase/auth";
 
 
 type Question = {
@@ -70,7 +69,8 @@ function GenerateButton({ hasGenerated }: { hasGenerated: boolean }) {
 export default function NewCampaignPage() {
     const router = useRouter();
     const { toast } = useToast();
-    const [user, loading, error] = useAuthState(auth);
+    const [user, setUser] = useState<any>(null);
+    const [authLoading, setAuthLoading] = useState(true);
     const [campaignName, setCampaignName] = useState("");
     const [campaignDescription, setCampaignDescription] = useState("");
     const [audience, setAudience] = useState("all");
@@ -84,12 +84,18 @@ export default function NewCampaignPage() {
     const [selectedGeneratedQuestions, setSelectedGeneratedQuestions] = useState<GeneratedQuestion[]>([]);
     const [state, formAction] = useActionState(generateQuestionsAction, initialState);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [showGeneratedQuestions, setShowGeneratedQuestions] = useState(false);
 
     useEffect(() => {
-        if (!loading && !user) {
-            router.push('/login');
-        }
-    }, [user, loading, router]);
+        const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+            setUser(firebaseUser);
+            setAuthLoading(false);
+            if (!firebaseUser) {
+                router.push('/login');
+            }
+        });
+        return () => unsubscribe();
+    }, [router]);
 
     const addQuestion = () => {
         setQuestions([...questions, { id: Date.now(), text: '', type: 'multiple-choice', options: [''] }]);
@@ -167,122 +173,117 @@ export default function NewCampaignPage() {
     const handleAddSelectedQuestions = () => {
         if (selectedGeneratedQuestions.length > 0) {
             const newQuestions = selectedGeneratedQuestions.map(q => ({
-                id: Date.now() + Math.random(), // ensure unique id
+                id: Date.now() + Math.random(),
                 text: q.text,
                 type: q.type,
                 options: q.type === 'multiple-choice' ? q.options : [],
             }));
-            // Replace empty question if it exists
             const filteredOldQuestions = questions.filter(q => q.text.trim() !== "");
             setQuestions([...filteredOldQuestions, ...newQuestions]);
             toast({
                 title: "Questions Added!",
                 description: `${newQuestions.length} AI-generated question(s) have been added.`,
             });
-            // Clear the selection
             setSelectedGeneratedQuestions([]);
-            // You may want to clear the whole result or just uncheck the boxes
-            state.result = null; 
+            setShowGeneratedQuestions(false);
         }
     }
   
-  if (loading || !user) {
-      return <div>Loading...</div>
+  if (authLoading || !user) {
+      return <div className="p-8 text-muted-foreground">Loading...</div>
   }
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto">
-        <form>
-            <div>
-                <h2 className="text-3xl font-headline font-bold tracking-tight">Create New Campaign</h2>
-                <p className="text-muted-foreground">
-                    Configure your campaign and add questions to get started.
-                </p>
-            </div>
+        <div>
+            <h2 className="text-3xl font-headline font-bold tracking-tight">Create New Campaign</h2>
+            <p className="text-muted-foreground">
+                Configure your campaign and add questions to get started.
+            </p>
+        </div>
 
-            <Card>
-                <CardHeader>
-                    <CardTitle>Campaign Details</CardTitle>
-                    <CardDescription>Provide a name, description, and target audience for your campaign.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
+        <Card>
+            <CardHeader>
+                <CardTitle>Campaign Details</CardTitle>
+                <CardDescription>Provide a name, description, and target audience for your campaign.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="space-y-2">
+                <Label htmlFor="campaign-name">Campaign Name</Label>
+                <Input id="campaign-name" placeholder="e.g., Spring Collection Feedback" required value={campaignName} onChange={(e) => setCampaignName(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                <Label htmlFor="campaign-description">Description</Label>
+                <Textarea id="campaign-description" placeholder="Briefly describe the goal of this campaign." value={campaignDescription} onChange={(e) => setCampaignDescription(e.target.value)} />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
-                    <Label htmlFor="campaign-name">Campaign Name</Label>
-                    <Input id="campaign-name" placeholder="e.g., Spring Collection Feedback" required value={campaignName} onChange={(e) => setCampaignName(e.target.value)} />
-                    </div>
-                    <div className="space-y-2">
-                    <Label htmlFor="campaign-description">Description</Label>
-                    <Textarea id="campaign-description" placeholder="Briefly describe the goal of this campaign." value={campaignDescription} onChange={(e) => setCampaignDescription(e.target.value)} />
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                            <Label htmlFor="start-date">Start Date</Label>
-                            <Popover>
-                                <PopoverTrigger asChild>
-                                <Button
-                                    variant={"outline"}
-                                    className={cn(
-                                    "w-full justify-start text-left font-normal",
-                                    !startDate && "text-muted-foreground"
-                                    )}
-                                >
-                                    <CalendarIcon className="mr-2 h-4 w-4" />
-                                    {startDate ? format(startDate, "PPP") : <span>Pick a date</span>}
-                                </Button>
-                                </PopoverTrigger>
-                                <PopoverContent className="w-auto p-0">
-                                <Calendar
-                                    mode="single"
-                                    selected={startDate}
-                                    onSelect={setStartDate}
-                                    initialFocus
-                                />
-                                </PopoverContent>
-                            </Popover>
-                        </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="end-date">End Date</Label>
-                            <Popover>
-                                <PopoverTrigger asChild>
-                                <Button
-                                    variant={"outline"}
-                                    className={cn(
-                                    "w-full justify-start text-left font-normal",
-                                    !endDate && "text-muted-foreground"
-                                    )}
-                                >
-                                    <CalendarIcon className="mr-2 h-4 w-4" />
-                                    {endDate ? format(endDate, "PPP") : <span>Pick a date</span>}
-                                </Button>
-                                </PopoverTrigger>
-                                <PopoverContent className="w-auto p-0">
-                                <Calendar
-                                    mode="single"
-                                    selected={endDate}
-                                    onSelect={setEndDate}
-                                    initialFocus
-                                />
-                                </PopoverContent>
-                            </Popover>
-                        </div>
+                        <Label htmlFor="start-date">Start Date</Label>
+                        <Popover>
+                            <PopoverTrigger asChild>
+                            <Button
+                                variant={"outline"}
+                                className={cn(
+                                "w-full justify-start text-left font-normal",
+                                !startDate && "text-muted-foreground"
+                                )}
+                            >
+                                <CalendarIcon className="mr-2 h-4 w-4" />
+                                {startDate ? format(startDate, "PPP") : <span>Pick a date</span>}
+                            </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-auto p-0">
+                            <Calendar
+                                mode="single"
+                                selected={startDate}
+                                onSelect={setStartDate}
+                                initialFocus
+                            />
+                            </PopoverContent>
+                        </Popover>
                     </div>
                     <div className="space-y-2">
-                    <Label htmlFor="audience-segment">Target Audience</Label>
-                    <Select value={audience} onValueChange={setAudience}>
-                        <SelectTrigger id="audience-segment">
-                        <SelectValue placeholder="Select an audience segment" />
-                        </SelectTrigger>
-                        <SelectContent>
-                        <SelectItem value="all">All Users</SelectItem>
-                        <SelectItem value="frequent-shoppers">Frequent Shoppers</SelectItem>
-                        <SelectItem value="new-subscribers">New Subscribers</SelectItem>
-                        <SelectItem value="lapsed-customers">Lapsed Customers</SelectItem>
-                        </SelectContent>
-                    </Select>
+                        <Label htmlFor="end-date">End Date</Label>
+                        <Popover>
+                            <PopoverTrigger asChild>
+                            <Button
+                                variant={"outline"}
+                                className={cn(
+                                "w-full justify-start text-left font-normal",
+                                !endDate && "text-muted-foreground"
+                                )}
+                            >
+                                <CalendarIcon className="mr-2 h-4 w-4" />
+                                {endDate ? format(endDate, "PPP") : <span>Pick a date</span>}
+                            </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-auto p-0">
+                            <Calendar
+                                mode="single"
+                                selected={endDate}
+                                onSelect={setEndDate}
+                                initialFocus
+                            />
+                            </PopoverContent>
+                        </Popover>
                     </div>
-                </CardContent>
-            </Card>
-        </form>
+                </div>
+                <div className="space-y-2">
+                <Label htmlFor="audience-segment">Target Audience</Label>
+                <Select value={audience} onValueChange={setAudience}>
+                    <SelectTrigger id="audience-segment">
+                    <SelectValue placeholder="Select an audience segment" />
+                    </SelectTrigger>
+                    <SelectContent>
+                    <SelectItem value="all">All Users</SelectItem>
+                    <SelectItem value="frequent-shoppers">Frequent Shoppers</SelectItem>
+                    <SelectItem value="new-subscribers">New Subscribers</SelectItem>
+                    <SelectItem value="lapsed-customers">Lapsed Customers</SelectItem>
+                    </SelectContent>
+                </Select>
+                </div>
+            </CardContent>
+        </Card>
 
         <Card>
             <CardHeader>
@@ -316,7 +317,7 @@ export default function NewCampaignPage() {
             </Alert>
         )}
 
-        {state.result && state.result.questions.length > 0 && (
+        {state.result && state.result.questions.length > 0 && showGeneratedQuestions && (
             <Card>
                 <CardHeader>
                     <CardTitle>AI-Generated Questions</CardTitle>
