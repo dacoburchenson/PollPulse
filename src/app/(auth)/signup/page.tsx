@@ -9,8 +9,9 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import Link from "next/link";
 import { User, Mail, Lock, LoaderCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { auth, googleProvider } from "@/lib/firebase";
+import { auth, db, googleProvider } from "@/lib/firebase";
 import { createUserWithEmailAndPassword, signInWithPopup, updateProfile } from "firebase/auth";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
@@ -41,6 +42,14 @@ export default function SignupPage() {
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         await updateProfile(userCredential.user, { displayName: name });
 
+        // Store the user's role in Firestore
+        await setDoc(doc(db, "userProfiles", userCredential.user.uid), {
+          userType: userType,
+          displayName: name,
+          email: email,
+          createdAt: new Date().toISOString(),
+        });
+
         toast({
             title: "Account Created!",
             description: "Welcome to PollPulse.",
@@ -62,7 +71,20 @@ export default function SignupPage() {
         setLoading(true);
         setError(null);
         try {
-            await signInWithPopup(auth, googleProvider);
+            const result = await signInWithPopup(auth, googleProvider);
+            
+            // Store the user's role in Firestore (only on first signup)
+            const profileRef = doc(db, "userProfiles", result.user.uid);
+            const profileSnap = await getDoc(profileRef);
+            if (!profileSnap.exists()) {
+                await setDoc(profileRef, {
+                    userType: userType,
+                    displayName: result.user.displayName || "",
+                    email: result.user.email || "",
+                    createdAt: new Date().toISOString(),
+                });
+            }
+            
             toast({
                 title: "Login Successful!",
                 description: "Welcome back.",

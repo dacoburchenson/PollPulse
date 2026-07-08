@@ -9,8 +9,9 @@ import Link from "next/link";
 import { Mail, Lock, LoaderCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { auth, googleProvider } from "@/lib/firebase";
+import { auth, db, googleProvider } from "@/lib/firebase";
 import { signInWithEmailAndPassword, signInWithPopup } from "firebase/auth";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
@@ -37,12 +38,22 @@ export default function LoginPage() {
     const password = formData.get("password") as string;
 
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      
+      // Read the user's stored role from Firestore
+      const profileDoc = await getDoc(doc(db, "userProfiles", userCredential.user.uid));
+      const storedRole = profileDoc.exists() ? profileDoc.data().userType : null;
+
       toast({
         title: "Login Successful!",
         description: "Welcome back.",
       });
-      if (userType === "brand") {
+      
+      if (storedRole === "brand") {
+        router.push('/dashboard');
+      } else if (storedRole === "consumer") {
+        router.push('/consumer/dashboard');
+      } else if (userType === "brand") {
         router.push('/dashboard');
       } else {
         router.push('/consumer/dashboard');
@@ -58,12 +69,30 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
     try {
-        await signInWithPopup(auth, googleProvider);
+        const result = await signInWithPopup(auth, googleProvider);
+        
+        // Check stored role or persist the selected one
+        const profileRef = doc(db, "userProfiles", result.user.uid);
+        const profileSnap = await getDoc(profileRef);
+        let targetRole = userType;
+        
+        if (profileSnap.exists()) {
+            targetRole = profileSnap.data().userType || userType;
+        } else {
+            // First time Google sign-in: persist the selected role
+            await setDoc(profileRef, {
+                userType: userType,
+                displayName: result.user.displayName || "",
+                email: result.user.email || "",
+                createdAt: new Date().toISOString(),
+            });
+        }
+        
         toast({
             title: "Login Successful!",
             description: "Welcome back.",
         });
-        if (userType === "brand") {
+        if (targetRole === "brand") {
             router.push('/dashboard');
         } else {
             router.push('/consumer/dashboard');

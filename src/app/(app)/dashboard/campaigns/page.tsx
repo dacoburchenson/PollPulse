@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState, useEffect } from "react";
@@ -26,21 +25,33 @@ import {
     DropdownMenuItem,
     DropdownMenuSeparator,
   } from "@/components/ui/dropdown-menu";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { MoreHorizontal, PlusCircle, Edit, Trash2, BarChart3 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { collection, getDocs, deleteDoc, doc, Timestamp, query, where } from "firebase/firestore";
+import { collection, getDocs, deleteDoc, doc, Timestamp, query, where, getCountFromServer } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { useToast } from "@/hooks/use-toast";
-import { useAuthState } from 'react-firebase-hooks/auth';
+import { onAuthStateChanged } from "firebase/auth";
 
 
 export type Campaign = {
-    id: string; // Firestore document ID
+    id: string;
     name: string;
     description?: string;
     audience?: string;
     responses: string;
+    responseCount: number;
     status: "Active" | "Draft" | "Completed";
     startDate?: Date;
     endDate?: Date;
@@ -50,36 +61,57 @@ export type Campaign = {
 
 export default function CampaignsPage() {
     const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-    const [user, loading, error] = useAuthState(auth);
+    const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+    const [user, setUser] = useState<any>(null);
+    const [authLoading, setAuthLoading] = useState(true);
+    const [pageLoading, setPageLoading] = useState(false);
     const router = useRouter();
     const { toast } = useToast();
 
     useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+            setUser(firebaseUser);
+            setAuthLoading(false);
+        });
+        return () => unsubscribe();
+    }, []);
+
+    useEffect(() => {
         const fetchCampaigns = async () => {
-            if (!user) {
-                if(!loading) {
-                    router.push("/login");
-                }
-                return;
-            };
+            if (!user || authLoading) return;
+            setPageLoading(true);
 
             try {
                 const q = query(collection(db, "campaigns"), where("userId", "==", user.uid));
                 const querySnapshot = await getDocs(q);
-                const campaignsData = querySnapshot.docs.map(doc => {
-                    const data = doc.data();
-                    return {
-                        id: doc.id,
+                const campaignsData: Campaign[] = [];
+
+                for (const docSnap of querySnapshot.docs) {
+                    const data = docSnap.data();
+                    // Count actual responses for each campaign
+                    let responseCount = 0;
+                    try {
+                        const countSnap = await getCountFromServer(
+                            collection(db, "campaigns", docSnap.id, "responses")
+                        );
+                        responseCount = countSnap.data().count;
+                    } catch {
+                        // Responses subcollection may not exist yet
+                    }
+
+                    campaignsData.push({
+                        id: docSnap.id,
                         name: data.name,
                         description: data.description,
                         audience: data.audience,
-                        responses: data.responses || "0",
+                        responses: responseCount.toString(),
+                        responseCount,
                         status: data.status,
                         startDate: data.startDate instanceof Timestamp ? data.startDate.toDate() : undefined,
                         endDate: data.endDate instanceof Timestamp ? data.endDate.toDate() : undefined,
                         questions: data.questions,
-                    }
-                }) as Campaign[];
+                    } as Campaign);
+                }
                 setCampaigns(campaignsData);
             } catch (error) {
                 console.error("Error fetching campaigns: ", error);
@@ -88,14 +120,15 @@ export default function CampaignsPage() {
                     description: "Could not retrieve campaigns from the database.",
                     variant: "destructive"
                 })
+            } finally {
+                setPageLoading(false);
             }
         };
 
-        if(user && !loading) {
+        if (user && !authLoading) {
             fetchCampaigns();
         }
-
-    }, [user, loading, router, toast]);
+    }, [user, authLoading, toast]);
 
     const handleEdit = (id: string) => {
         router.push(`/dashboard/campaigns/edit/${id}`);
@@ -105,32 +138,33 @@ export default function CampaignsPage() {
         router.push(`/dashboard/campaigns/${id}/report`);
     }
 
-    const handleDelete = async (id: string) => {
-        if(confirm("Are you sure you want to delete this campaign?")) {
-            try {
-                await deleteDoc(doc(db, "campaigns", id));
-                const updatedCampaigns = campaigns.filter(c => c.id !== id);
-                setCampaigns(updatedCampaigns);
-                toast({
-                    title: "Campaign Deleted",
-                    description: "The campaign has been successfully deleted."
-                })
-            } catch (error) {
-                 console.error("Error deleting campaign: ", error);
-                 toast({
-                    title: "Error deleting campaign",
-                    description: "Could not delete the campaign from the database.",
-                    variant: "destructive"
-                })
-            }
+    const handleDelete = async () => {
+        if (!deleteTarget) return;
+        try {
+            await deleteDoc(doc(db, "campaigns", deleteTarget));
+            setCampaigns(prev => prev.filter(c => c.id !== deleteTarget));
+            toast({
+                title: "Campaign Deleted",
+                description: "The campaign has been successfully deleted."
+            })
+        } catch (error) {
+             console.error("Error deleting campaign: ", error);
+             toast({
+                title: "Error deleting campaign",
+                description: "Could not delete the campaign from the database.",
+                variant: "destructive"
+            })
+        } finally {
+            setDeleteTarget(null);
         }
     }
 
-  if (loading) {
-    return <div>Loading campaigns...</div>
+  if (authLoading) {
+    return <div className="p-8 text-muted-foreground">Loading campaigns...</div>
   }
   if (!user) {
-    return <div>Redirecting to login...</div>
+    router.push('/login');
+    return <div className="p-8 text-muted-foreground">Redirecting to login...</div>
   }
 
 
@@ -164,6 +198,18 @@ export default function CampaignsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {pageLoading ? (
+              <div className="flex items-center justify-center h-32 text-muted-foreground">
+                Loading campaigns...
+              </div>
+            ) : campaigns.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-32 text-muted-foreground gap-2">
+                <p>No campaigns yet.</p>
+                <Button asChild variant="outline" size="sm">
+                  <Link href="/dashboard/campaigns/new">Create your first campaign</Link>
+                </Button>
+              </div>
+            ) : (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -181,9 +227,9 @@ export default function CampaignsPage() {
                 {campaigns.map((campaign) => (
                   <TableRow key={campaign.id}>
                     <TableCell className="font-medium">{campaign.name}</TableCell>
-                    <TableCell>{campaign.startDate?.toLocaleDateString()}</TableCell>
-                    <TableCell>{campaign.endDate?.toLocaleDateString()}</TableCell>
-                    <TableCell className="text-right">{campaign.responses}</TableCell>
+                    <TableCell>{campaign.startDate?.toLocaleDateString() || "--"}</TableCell>
+                    <TableCell>{campaign.endDate?.toLocaleDateString() || "--"}</TableCell>
+                    <TableCell className="text-right">{campaign.responseCount}</TableCell>
                     <TableCell>
                       <Badge
                         variant={
@@ -215,7 +261,7 @@ export default function CampaignsPage() {
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               className="text-destructive"
-                              onClick={() => handleDelete(campaign.id)}
+                              onClick={() => setDeleteTarget(campaign.id)}
                             >
                               <Trash2 /> Delete Campaign
                             </DropdownMenuItem>
@@ -227,9 +273,28 @@ export default function CampaignsPage() {
                 ))}
               </TableBody>
             </Table>
+            )}
           </CardContent>
         </Card>
       </div>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete this campaign and all of its responses.
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
