@@ -3,16 +3,14 @@
 * @see https://v0.dev/t/acAUi3j4n0P
 * Documentation: https://v0.dev/docs#integrating-with-your-app
 */
-"use client"
-
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardContent } from "@/components/ui/card"
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
 import Image from "next/image"
-import { BarChart2, Zap, Users, Shield, ArrowRight, TrendingUp, DollarSign, Globe, Lock, BrainCircuit, CheckCircle, Menu } from "lucide-react"
+import { BarChart2, Zap, Users, Shield, ArrowRight, TrendingUp, DollarSign, Globe, Lock, BrainCircuit, CheckCircle } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
-import { Sheet, SheetTrigger, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
+import { MobileNav } from "@/components/mobile-nav"
 
 export function LandingPage() {
   return (
@@ -37,41 +35,7 @@ export function LandingPage() {
           </Link>
         </nav>
         <div className="ml-auto lg:hidden">
-          <Sheet>
-            <SheetTrigger asChild>
-              <Button variant="outline" size="icon">
-                  <Menu className="h-6 w-6" />
-                  <span className="sr-only">Toggle navigation menu</span>
-              </Button>
-            </SheetTrigger>
-            <SheetContent side="left">
-                <SheetHeader>
-                    <SheetTitle className="sr-only">Navigation Menu</SheetTitle>
-                </SheetHeader>
-              <nav className="grid gap-6 text-lg font-medium">
-                <Link href="#" className="flex items-center gap-2 text-lg font-semibold" prefetch={false}>
-                  <BarChart2 className="h-6 w-6 text-primary" />
-                  <span>PollPulse</span>
-                </Link>
-                <Link href="#features" className="hover:text-primary" prefetch={false}>
-                  For Brands
-                </Link>
-                <Link href="#how-it-works" className="hover:text-primary" prefetch={false}>
-                  For Consumers
-                </Link>
-                <Link href="#pricing" className="hover:text-primary" prefetch={false}>
-                  Pricing
-                </Link>
-                <Link href="#testimonials" className="hover:text-primary" prefetch={false}>
-                  Testimonials
-                </Link>
-                 <div className="flex flex-col gap-4 mt-6">
-                    <Button variant="ghost" asChild><Link href="/login">Sign In</Link></Button>
-                    <Button asChild><Link href="/signup">Get Started</Link></Button>
-                </div>
-              </nav>
-            </SheetContent>
-          </Sheet>
+          <MobileNav />
         </div>
         <div className="hidden lg:flex items-center gap-4 ml-6">
             <Button variant="ghost" asChild><Link href="/login">Sign In</Link></Button>
