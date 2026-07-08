@@ -1,7 +1,6 @@
-
 "use client";
 
-import * as React from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -12,14 +11,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { CircleDollarSign, BarChart, Trophy, ArrowRight } from "lucide-react";
-import { collection, getDocs, query, where, Timestamp } from "firebase/firestore";
+import { CircleDollarSign, BarChart, Trophy, ArrowRight, Loader2 } from "lucide-react";
+import { collection, getDocs, query, where, doc, getDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-import { useAuthState } from 'react-firebase-hooks/auth';
+import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
-import { errorEmitter } from "@/firebase/error-emitter";
-import { FirestorePermissionError } from "@/firebase/errors";
 import Link from "next/link";
 
 type Campaign = {
@@ -34,64 +31,106 @@ type Campaign = {
 };
 
 export default function ConsumerDashboardPage() {
-  const [user, loading, error] = useAuthState(auth);
   const router = useRouter();
   const { toast } = useToast();
-  const [availableSurveys, setAvailableSurveys] = React.useState<Campaign[]>([]);
+  const [user, setUser] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [availableSurveys, setAvailableSurveys] = useState<Campaign[]>([]);
+  const [surveysCompleted, setSurveysCompleted] = useState(0);
+  const [lifetimeEarnings, setLifetimeEarnings] = useState(0);
+  const [statsLoading, setStatsLoading] = useState(true);
 
-  React.useEffect(() => {
-    const fetchCampaigns = async () => {
-      if (!user && !loading) {
+  // Parse a reward string like "$1.50" or "JMD $200" into a number.
+  // Falls back to 1 when the field is missing or unparseable (the
+  // consumer dashboard also defaults reward to "$1.00").
+  const parseRewardAmount = (reward?: string): number => {
+    if (!reward) return 1
+    const match = reward.replace(/[^0-9.]/g, "")
+    const num = parseFloat(match)
+    return Number.isFinite(num) ? num : 1
+  }
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      setUser(firebaseUser);
+      setAuthLoading(false);
+      if (!firebaseUser) {
         router.push("/login");
-        return;
       }
-      if (user) {
-        try {
-          const q = query(collection(db, "campaigns"), where("status", "==", "Active"));
-          const querySnapshot = await getDocs(q).catch((serverError) => {
-            const permissionError = new FirestorePermissionError({
-              path: 'campaigns',
-              operation: 'list',
-            });
-            errorEmitter.emit('permission-error', permissionError);
-            // Return an empty snapshot to avoid breaking the app flow
-            return { docs: [] };
-          });
+    });
+    return () => unsubscribe();
+  }, [router]);
 
-          const campaignsData = querySnapshot.docs.map(doc => {
-              const data = doc.data();
-              return {
-                  id: doc.id,
-                  name: data.name,
-                  questions: data.questions || [],
-                  reward: data.reward || "$1.00", // Default reward
-                  brandName: data.brandName || "A Brand", // Default brand name
-                  brandColor: data.brandColor || "bg-gray-500", // Default color
-                  status: data.status,
-              }
-          }) as Campaign[];
-          setAvailableSurveys(campaignsData);
-        } catch (error: any) {
-             // This will catch other errors, but permission errors are handled above
-            console.error("Error fetching campaigns: ", error);
-            if (!(error instanceof FirestorePermissionError)) {
-                toast({
-                    title: "Error fetching surveys",
-                    description: "Could not retrieve available surveys.",
-                    variant: "destructive"
-                })
+  useEffect(() => {
+    const fetchData = async () => {
+      if (!user || authLoading) return;
+
+      try {
+        // Fetch active campaigns
+        const q = query(collection(db, "campaigns"), where("status", "==", "Active"));
+        const querySnapshot = await getDocs(q);
+
+        const campaignsData = querySnapshot.docs.map(doc => {
+            const data = doc.data();
+            return {
+                id: doc.id,
+                name: data.name,
+                questions: data.questions || [],
+                reward: data.reward || "$1.00",
+                brandName: data.brandName || "A Brand",
+                brandColor: data.brandColor || "bg-gray-500",
+                status: data.status,
             }
+        }) as Campaign[];
+        setAvailableSurveys(campaignsData);
+
+        // Count surveys the user has completed (responses they've submitted)
+        // and sum the per-campaign reward for lifetime earnings.
+        let completedCount = 0;
+        let totalEarnings = 0;
+        for (const campaign of querySnapshot.docs) {
+          const responsesQuery = query(
+            collection(db, "campaigns", campaign.id, "responses"),
+            where("userId", "==", user.uid)
+          );
+          const responsesSnap = await getDocs(responsesQuery);
+          const responsesForCampaign = responsesSnap.docs.length;
+          if (responsesForCampaign === 0) continue;
+          completedCount += responsesForCampaign;
+          // Fetch the campaign's reward string (e.g. "$1.50") to compute
+          // the user's actual earnings from this campaign.
+          const campaignSnap = await getDoc(doc(db, "campaigns", campaign.id));
+          const rewardStr = campaignSnap.exists()
+            ? (campaignSnap.data() as { reward?: string }).reward
+            : undefined;
+          totalEarnings += parseRewardAmount(rewardStr) * responsesForCampaign;
         }
+        setSurveysCompleted(completedCount);
+        setLifetimeEarnings(totalEarnings);
+      } catch (err: any) {
+        console.error("Error fetching data: ", err);
+        toast({
+            title: "Error loading surveys",
+            description: "Could not retrieve available surveys.",
+            variant: "destructive"
+        });
+      } finally {
+        setStatsLoading(false);
       }
     };
 
-    if (!loading) {
-        fetchCampaigns();
+    if (user && !authLoading) {
+        fetchData();
     }
-  }, [user, loading, router, toast]);
+  }, [user, authLoading, toast]);
 
-  if (loading || !user) {
-      return <div>Loading...</div>;
+  if (authLoading || !user) {
+      return (
+        <div className="flex items-center justify-center h-48">
+          <Loader2 className="animate-spin mr-2" />
+          <span className="text-muted-foreground">Loading...</span>
+        </div>
+      );
   }
 
   return (
@@ -114,10 +153,18 @@ export default function ConsumerDashboardPage() {
             <CircleDollarSign className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">$142.75</div>
-            <p className="text-xs text-muted-foreground">
-              + $12.50 from last week
-            </p>
+            {statsLoading ? (
+              <div className="h-8 w-20 bg-muted rounded animate-pulse mb-2" />
+            ) : (
+              <>
+                <div className="text-2xl font-bold">
+                  ${lifetimeEarnings.toFixed(2)}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {surveysCompleted > 0 ? `From ${surveysCompleted} survey${surveysCompleted === 1 ? "" : "s"} completed` : "Complete surveys to earn"}
+                </p>
+              </>
+            )}
           </CardContent>
         </Card>
         <Card>
@@ -128,10 +175,16 @@ export default function ConsumerDashboardPage() {
             <BarChart className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">48</div>
-            <p className="text-xs text-muted-foreground">
-              {availableSurveys.length} new surveys available
-            </p>
+            {statsLoading ? (
+              <div className="h-8 w-16 bg-muted rounded animate-pulse mb-2" />
+            ) : (
+              <>
+                <div className="text-2xl font-bold">{surveysCompleted}</div>
+                <p className="text-xs text-muted-foreground">
+                  {availableSurveys.length} new surveys available
+                </p>
+              </>
+            )}
           </CardContent>
         </Card>
         <Card>
@@ -140,10 +193,18 @@ export default function ConsumerDashboardPage() {
             <Trophy className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">Gold Tier</div>
-            <p className="text-xs text-muted-foreground">
-              Top 15% of responders
-            </p>
+            {statsLoading ? (
+              <div className="h-8 w-24 bg-muted rounded animate-pulse mb-2" />
+            ) : (
+              <>
+                <div className="text-2xl font-bold">
+                  {surveysCompleted > 0 ? "Active" : "Newcomer"}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {surveysCompleted > 0 ? `Based on ${surveysCompleted} survey(s)` : "Start your first survey"}
+                </p>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -152,6 +213,14 @@ export default function ConsumerDashboardPage() {
         <h3 className="text-2xl font-headline font-bold tracking-tight mb-4">
           Available Surveys
         </h3>
+        {availableSurveys.length === 0 && !statsLoading ? (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center h-32 text-muted-foreground gap-2">
+              <BarChart className="h-8 w-8" />
+              <p>No surveys available right now. Check back later!</p>
+            </CardContent>
+          </Card>
+        ) : (
         <div className="grid gap-6 md:grid-cols-2">
           {availableSurveys.map((survey) => (
             <Card key={survey.id} className="flex flex-col">
@@ -178,6 +247,7 @@ export default function ConsumerDashboardPage() {
             </Card>
           ))}
         </div>
+        )}
       </div>
     </div>
   )
